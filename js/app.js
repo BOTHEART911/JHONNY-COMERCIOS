@@ -205,7 +205,7 @@ function paintVersion(v) { $$('.app-version-line').forEach(el => el.textContent 
 async function checkVersion() {
   if (__verInFlight) return; __verInFlight = true;
   try {
-    const r = await fetch('version.js?t=' + Date.now(), { cache: 'no-store' });
+    const r = await fetch('js/version.js?t=' + Date.now(), { cache: 'no-store' });
     const txt = await r.text();
     const m = txt.match(/APP_VERSION\s*=\s*["']([^"']+)["']/);
     if (!m) return;
