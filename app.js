@@ -62,17 +62,19 @@ let _apiActivas = 0;
 function loaderOn() { _apiActivas++; const b = $('#ios-loader'); if (b) b.classList.add('active'); }
 function loaderOff() { _apiActivas = Math.max(0, _apiActivas - 1); if (_apiActivas === 0) { const b = $('#ios-loader'); if (b) b.classList.remove('active'); } }
 
+/* 12/10/2026 · Fase 1: el viaje lo hace red.js (pieza común del ecosistema):
+   rid en escrituras, corte al cambiar de vista, cola de fondo, reintento
+   seguro (solo red caída o eco de Google, y en escrituras solo con el mismo
+   rid) y versión del backend. Una lectura cortada no resuelve nunca: el
+   código de la vista vieja simplemente no sigue. */
 async function api(action, params = {}, method = 'GET', body = null, opts = {}) {
-  const qs = new URLSearchParams(Object.assign({ action }, params)).toString();
-  const o = { method };
-  if (method === 'POST') { o.headers = { 'Content-Type': 'text/plain;charset=utf-8' }; o.body = JSON.stringify(body || {}); }
   if (!opts.silencio) loaderOn();
-  try {
-    const res = await fetch(`${API_URL}?${qs}`, o);
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || 'Error del servidor');
-    return json.data;
-  } finally { if (!opts.silencio) loaderOff(); }
+  let json;
+  try { json = await RED.pedir(API_URL, action, params, { metodo: method, cuerpo: method === 'POST' ? (body || {}) : null, fondo: !!opts.silencio && RED.esLectura(action) }); }
+  catch (e) { if (!opts.silencio) loaderOff(); if (e && e.cortado) return new Promise(() => {}); throw e; }
+  if (!opts.silencio) loaderOff();
+  if (!json.ok) throw new Error(json.error || 'Error del servidor');
+  return json.data;
 }
 
 function saving(btn, on) {
@@ -222,6 +224,7 @@ function go(route) { location.hash = '#/' + route; }
 function rutaActual() { return (location.hash || '').replace(/^#\//, ''); }
 
 function render() {
+  RED.nuevaVista();   /* 12/10/2026 · corta lecturas de la vista que se va */
   const r = rutaActual();
   const base = r.split('?')[0];
   if (base !== 'validar') scanStop();
@@ -1345,6 +1348,8 @@ function resultado(kind, titulo, sub) {
 
 /* --- Motor de escaneo (el mismo de JHONNY ASISTENCIA) --- */
 const SCAN = { on: false, stream: null, det: null, raf: null, busy: false, total: 0, vistos: new Map() };
+/* 12/10/2026 · red.js no recarga por versión nueva con el escáner encendido */
+window.RED_NO_RECARGAR = () => SCAN.on;
 const COOLDOWN_MS = 5000;
 const NO_HAY = 'NO_HAY';
 
