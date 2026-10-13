@@ -67,15 +67,26 @@ function loaderOff() { _apiActivas = Math.max(0, _apiActivas - 1); if (_apiActiv
    seguro (solo red caída o eco de Google, y en escrituras solo con el mismo
    rid) y versión del backend. Una lectura cortada no resuelve nunca: el
    código de la vista vieja simplemente no sigue. */
+/* 12/10/2026 · Fase 4: las LECTURAS muestran el indicador pero no levantan el
+   escudo de la capa 12 (leer nunca bloquea la navegación); las escrituras sí. */
+let _leeActivas = 0;
+function leeOn() { _leeActivas++; const b = $('#ios-loader'); if (b) b.classList.add('active'); }
+function leeOff() { _leeActivas = Math.max(0, _leeActivas - 1); if (_leeActivas === 0 && _apiActivas === 0) { const b = $('#ios-loader'); if (b) b.classList.remove('active'); } }
 async function api(action, params = {}, method = 'GET', body = null, opts = {}) {
-  if (!opts.silencio) loaderOn();
+  const lectura = RED.esLectura(action);
+  const on = lectura ? leeOn : loaderOn, off = lectura ? leeOff : loaderOff;
+  if (!opts.silencio) on();
   let json;
-  try { json = await RED.pedir(API_URL, action, params, { metodo: method, cuerpo: method === 'POST' ? (body || {}) : null, fondo: !!opts.silencio && RED.esLectura(action) }); }
-  catch (e) { if (!opts.silencio) loaderOff(); if (e && e.cortado) return new Promise(() => {}); throw e; }
-  if (!opts.silencio) loaderOff();
+  try { json = await RED.pedir(API_URL, action, params, { metodo: method, cuerpo: method === 'POST' ? (body || {}) : null, fondo: !!opts.silencio && lectura, persistente: !!opts.persistente }); }
+  catch (e) { if (!opts.silencio) off(); if (e && e.cortado) return new Promise(() => {}); throw e; }
+  if (!opts.silencio) off();
   if (!json.ok) throw new Error(json.error || 'Error del servidor');
   return json.data;
 }
+
+/* Paquete público (publico.js): las noticias salen de Firebase; si hace falta,
+   el CORE se consulta de fondo y sin cortarse al cambiar de vista. */
+PUB.pedidor((accion, params) => api(accion, params || {}, 'GET', null, { silencio: true, persistente: true }));
 
 function saving(btn, on) {
   if (!btn) return;
@@ -143,7 +154,7 @@ function dispositivo() {
 }
 function sesLeer() { try { SES = JSON.parse(localStorage.getItem(SES_KEY) || 'null'); } catch (e) { SES = null; } return SES; }
 function sesGuardar(s) { SES = s; try { localStorage.setItem(SES_KEY, JSON.stringify(s)); } catch (e) {} }
-function sesBorrar() { SES = null; try { localStorage.removeItem(SES_KEY); } catch (e) {} }
+function sesBorrar() { try { comMioBorrar(); } catch (e) {} SES = null; try { localStorage.removeItem(SES_KEY); } catch (e) {} }
 function auth() { return SES ? { nit: SES.nit, token: SES.token } : {}; }
 
 /* ============================================================
@@ -550,10 +561,15 @@ function viewRegistro() {
   });
 }
 
+/* 12/10/2026 · Fase 4: el catálogo (14 KB) se guarda en el dispositivo y se
+   revalida de fondo una vez por sesión. */
+const CAT_KEY = nsKey('jpComCatalogo');
 async function cargarCatalogo() {
   if (CATALOGO) return CATALOGO;
-  CATALOGO = await api('com.catalogo');
-  return CATALOGO;
+  let g = null; try { g = JSON.parse(localStorage.getItem(CAT_KEY) || 'null'); } catch (e) {}
+  const pedir = () => api('com.catalogo', {}, 'GET', null, { silencio: !!g, persistente: true }).then(r => { try { localStorage.setItem(CAT_KEY, JSON.stringify(r)); } catch (e) {} CATALOGO = r; return r; });
+  if (g) { CATALOGO = g; pedir().catch(() => {}); return g; }
+  return pedir();
 }
 
 function pasoPintarBarra() {
@@ -1016,6 +1032,11 @@ function sheetCodigoRegistro(env) {
    ============================================================ */
 let COM = null;
 let COM_COMPARTIR = '';
+/* 12/10/2026 · Fase 4: la ficha del comercio guardada en el dispositivo (por NIT) */
+const COM_MIO_KEY = () => nsKey('jpComMio:' + ((SES && SES.nit) || ''));
+function comMioLeer() { try { const o = JSON.parse(localStorage.getItem(COM_MIO_KEY()) || 'null'); return (o && o.comercio && SES && String(o.comercio.nit) === String(SES.nit)) ? o : null; } catch (e) { return null; } }
+function comMioGuardar(r) { try { localStorage.setItem(COM_MIO_KEY(), JSON.stringify({ comercio: r.comercio, compartir: r.compartir || '' })); } catch (e) {} }
+function comMioBorrar() { try { localStorage.removeItem(COM_MIO_KEY()); } catch (e) {} }
 
 async function viewHome() {
   montar(`
@@ -1026,14 +1047,22 @@ async function viewHome() {
     </div>
     <div class="pad stack" id="hm-body">${loadingBox('Cargando tu comercio…')}</div>`);
   $('#hm-salir').onclick = salir;
+  /* 12/10/2026 · Fase 4 · CABECERA ANTES QUE DATOS: la ficha guardada en este
+     dispositivo se pinta de una; com.mio revalida de fondo y solo se repinta
+     si algo cambió. La primera vez se espera como antes. */
+  const guardado = comMioLeer();
+  if (guardado) { COM = guardado.comercio; COM_COMPARTIR = guardado.compartir || ''; pintarHome(); }
   try {
-    const r = await api('com.mio', auth());
+    const r = await api('com.mio', auth(), 'GET', null, { silencio: !!guardado });
     if (!r.ok) throw new Error(r.msg || 'sin datos');
+    const cambio = !guardado || JSON.stringify(guardado.comercio) !== JSON.stringify(r.comercio) || (guardado.compartir || '') !== (r.compartir || '');
     COM = r.comercio;
     COM_COMPARTIR = r.compartir || '';
+    comMioGuardar(r);
     sesGuardar({ nit: COM.nit, nombre: COM.nombre, token: SES.token });
-    pintarHome();
+    if (cambio && $('#hm-body') && !layer.children.length) pintarHome();
   } catch (e) {
+    if (guardado && !/sesión/i.test(String(e.message))) return;   // sin red: se queda lo guardado
     if (/sesión/i.test(String(e.message))) { sesBorrar(); return go('login'); }
     $('#hm-body').innerHTML = `<div class="ev-card"><p class="muted">No se pudo cargar tu comercio. Revisa la conexión.</p><button class="btn btn-ghost btn-block" onclick="location.reload()" style="margin-top:10px;">Reintentar</button></div>`;
   }
@@ -1140,10 +1169,21 @@ function compartir() {
 /* ============================================================
    VISTA · POLÍTICAS DE USO
    ============================================================ */
+/* 12/10/2026 · Fase 4: las políticas casi nunca cambian: se guardan en el
+   dispositivo y se revalidan de fondo (una vez por sesión). */
+const POL_KEY = nsKey('jpComPoliticas');
+let _polRev = false;
+async function politicas() {
+  let g = null; try { g = JSON.parse(localStorage.getItem(POL_KEY) || 'null'); } catch (e) {}
+  const pedir = () => api('com.politicas', {}, 'GET', null, { silencio: !!g, persistente: true }).then(r => { if (r && r.items) { try { localStorage.setItem(POL_KEY, JSON.stringify(r)); } catch (e) {} } return r; });
+  if (g && g.items) { if (!_polRev) { _polRev = true; pedir().catch(() => {}); } return g; }
+  _polRev = true;
+  return pedir();
+}
 async function viewPoliticas() {
   montar(`${backbar('Políticas de Uso', 'home')}<div class="pad stack" id="po-body">${loadingBox('Cargando…')}</div>`);
   try {
-    const r = await api('com.politicas');
+    const r = await politicas();
     $('#po-body').innerHTML = `
       <div class="hoja">
         <div class="hoja-top"><img src="${APP_ICON}" alt="" /><div><b>${esc(r.titulo)}</b><span>Comercios aliados · ${esc(MV.lema)}</span></div></div>
@@ -1157,7 +1197,7 @@ async function viewPoliticas() {
 function sheetPoliticas() {
   const s = openSheet(`<div class="grip"></div><h2 class="h2">Políticas de Uso</h2><div id="sp-body">${loadingBox('Cargando…')}</div>
     <button class="btn btn-ghost btn-block" data-close style="margin-top:12px;">Cerrar</button>`);
-  api('com.politicas').then(r => {
+  politicas().then(r => {
     $('#sp-body', s).innerHTML = `<ol class="hoja-list">${r.items.map(t => `<li>${esc(t)}</li>`).join('')}</ol>`;
   }).catch(() => { $('#sp-body', s).innerHTML = `<p class="muted small">No se pudieron cargar.</p>`; });
 }
@@ -1652,7 +1692,8 @@ function viewPreview() {
 async function viewAvisos() {
   montar(`${backbar('Ponte al día', 'home')}<div class="pad stack" id="av-body">${loadingBox('Buscando novedades…')}</div>`);
   try {
-    const r = await api('pub.noticias', { limite: 20 });
+    /* 12/10/2026 · Fase 4: del paquete público (Firebase); el CORE solo si no hay */
+    const r = await PUB.o('noticias', () => api('pub.noticias', { limite: 20 }));
     const lista = Array.isArray(r) ? r : (r.noticias || r.items || []);
     $('#av-body').innerHTML = lista.length ? lista.map(n => `
       <div class="ev-card stack">

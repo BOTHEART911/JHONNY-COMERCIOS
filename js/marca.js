@@ -43,6 +43,12 @@
        para todas las apps de una campaña. */
     API_URL: 'https://script.google.com/macros/s/AKfycbw9CZ9ra6q1KI88M3U9IsYP861JOCFD4-xrV1b0UFYhL1amBjAqTTmtNXi42vwLI_h6Hw/exec',
 
+    /* 12/10/2026 · Fase 4 · Realtime Database de la campaña (la misma de
+       MARCA_FB_RTDB en CONFIG). De aquí se leen los datos públicos (las
+       noticias de "Ponte al día") sin pasar por Apps Script. Al replicar:
+       la URL del RTDB de la campaña nueva. */
+    FB_RTDB: 'https://jhonny-perdomo-default-rtdb.firebaseio.com',
+
     /* Carpeta web donde viven las imagenes COMPARTIDAS de la campana
        (logo, banner, foto por defecto). Termina en /.
        Sirve para que las llaves de imagen puedan guardar solo el nombre
